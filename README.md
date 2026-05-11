@@ -86,11 +86,58 @@ Register with Claude Code by adding to `.mcp.json` (project) or
 For Claude Desktop, add the same entry under `mcpServers` in
 `~/Library/Application Support/Claude/claude_desktop_config.json` (macOS).
 
+## Usage
+
+Once registered, restart your MCP client and the tools appear under the
+`vfat` server. You don't have to call them by name — describe what you want
+and the model will pick the right tool.
+
+**Example prompts**
+
+- "Show me TVL by chain on vfat with 24h, 7d and 1m changes."
+- "List Aerodrome farms on Base with TVL above 10M."
+- "Get full metrics for the Aerodrome USDC/cbBTC Slipstream farm on Base
+  (farm `0x6399ed67…`, pool `0x4e962bb3…`)."
+- "What LP positions does wallet `0x…` hold on Base?"
+- "Decode the LP events in tx `0x…` on Base."
+- "Latest deposits / harvests across all chains."
+- "AERO price right now."
+
+**Direct invocation**
+
+If you prefer explicit tool calls, every input parameter is listed in the
+[Tools](#tools) section. A minimal example for the most useful tool:
+
+```json
+{
+  "tool": "vfat_get_farm",
+  "arguments": {
+    "chainId": 8453,
+    "farmAddress": "0x6399ed6725cc163d019aa64ff55b22149d7179a8",
+    "poolAddress": "0x4e962bb3889bf030368f56810a9c96b83cb3e778"
+  }
+}
+```
+
+**RPC configuration (on-chain tools only)**
+
+`vfat_get_wallet_lp_positions` and `vfat_decode_lp_tx` use public RPCs by
+default (`base-rpc.publicnode.com`, `ethereum-rpc.publicnode.com`,
+`arbitrum-one-rpc.publicnode.com`, etc — see `DEFAULT_RPC_URLS` in
+[`lib/onchain.ts`](lib/onchain.ts)). Public endpoints rate-limit; for
+production workloads pass `rpcUrl` per call (Alchemy, Infura, QuickNode all
+work) or fork the repo and edit the defaults.
+
+The supported NonfungiblePositionManager addresses live in
+`KNOWN_NFT_MANAGERS`. To query a fork not in the list, pass
+`nftManagerAddress` plus `nftManagerAbi` (`"uniswap-v3"` or
+`"aerodrome-slipstream"`) when calling `vfat_get_wallet_lp_positions`.
+
 ## Endpoint reference
 
-All endpoints discovered via HAR capture of pages on
-`https://info.vf.at`. Two of them return base64-encoded JSON bodies; this
-server decodes transparently.
+**vfat info API** (`https://info-api.vf.at`) — discovered via HAR capture of
+pages on `https://info.vf.at`. Two endpoints return base64-encoded JSON
+bodies; this server decodes transparently.
 
 | Endpoint | Wrapped by tool |
 |---|---|
@@ -104,6 +151,15 @@ server decodes transparently.
 | `GET /action-volumes` | `vfat_get_action_volumes` |
 | `GET /positions-summary` | `vfat_get_positions_summary` |
 | `GET /get-most-recent-token-prices` (base64) | `vfat_get_recent_token_prices` |
+
+**On-chain (EVM RPC)** — uses [viem](https://viem.sh) against public RPCs
+(override per call with `rpcUrl`).
+
+| Read | Used by |
+|---|---|
+| `NonfungiblePositionManager.balanceOf` / `tokenOfOwnerByIndex` / `positions` | `vfat_get_wallet_lp_positions` |
+| `eth_getTransactionReceipt` + Uniswap V3 / Slipstream event decode | `vfat_decode_lp_tx` |
+| `IUniswapV3Pool.token0` / `token1` + `ERC20.symbol` / `decimals` | both (metadata enrichment) |
 
 ## Example
 
