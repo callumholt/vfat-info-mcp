@@ -1,6 +1,6 @@
 {
   "name": "vfat-info-mcp",
-  "version": "0.3.0",
+  "version": "0.3.1",
   "description": "MCP server exposing vfat.io farm, TVL, and price data via the public info-api.vf.at endpoints",
   "license": "MIT",
   "author": "Callum Holt",

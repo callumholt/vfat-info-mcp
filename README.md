@@ -39,13 +39,14 @@ No auth is required — the endpoints are unauthenticated CORS GETs.
   inflow/outflow USD.
 - `vfat_get_positions_summary({ chainId?, ownerAddress?, protocolId?, limit? })` —
   per-position summary (~1.4 MB raw, always filtered client-side).
-- `vfat_get_user_deposits({ address, chainId?, type?, stripPriceHistory? })` —
-  every live LP / farm / gauge deposit visible to vfat for `address`, across
-  all chains. The API auto-resolves the user's Sickle and merges
-  Sickle-managed gauge positions with directly-held NFT positions in one
-  call. Each entry includes pool, current tick + sqrtPrice, position tick
-  range with liquidity, pending rewards, underlying token metadata, and the
-  Sickle address when applicable.
+- `vfat_get_user_deposits({ address, chainId?, type?, includeUnmanaged?, stripPriceHistory? })` —
+  Sickle-managed LP / farm / gauge deposits for `address` across all chains.
+  Default returns only positions actively managed through the user's Sickle
+  (non-null `sickleAddress`). Pass `includeUnmanaged: true` to also include
+  raw NFTs vfat detected on the wallet that haven't been deposited into a
+  Sickle yet (these power vfat's "migrate" suggestions). Each entry
+  includes pool, current tick + sqrtPrice, tick range with liquidity,
+  pending rewards, underlying token metadata, and the Sickle address.
 
 **Tokens**
 - `vfat_get_recent_token_prices({ symbol?, address?, chainId?, limit? })` —

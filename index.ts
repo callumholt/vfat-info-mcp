@@ -244,7 +244,7 @@ const tools: Tool[] = [
   {
     name: "vfat_get_user_deposits",
     description:
-      "Return all live LP / farm / gauge deposits visible to vfat for a wallet across every chain. Wraps GET https://info-api.vf.at/farm-balances (unauthenticated). The API automatically resolves the user's Sickle smart-wallet on each chain and merges Sickle-managed gauge positions with directly-held NFT positions in one response. Each entry includes pool address + tokens, current tick + sqrtPrice, position tick range (for NFT positions) with liquidity, pendingRewards, underlying asset metadata, and the sickleAddress when the position is Sickle-managed. Use this instead of vfat_get_wallet_lp_positions when you want vfat's enriched view (rewards, APR-relevant data) or when the position is staked in a gauge and therefore invisible to direct ownerOf() lookups.",
+      "Return Sickle-managed LP / farm / gauge deposits visible to vfat for a wallet across every chain. Wraps GET https://info-api.vf.at/farm-balances (unauthenticated). By default returns only positions actively managed through the user's Sickle smart-wallet (those with a non-null sickleAddress). Set includeUnmanaged=true to also include raw NFTs that vfat detected the wallet holding but hasn't been deposited into a Sickle yet (these power vfat's 'migrate this position' suggestions). Each entry includes pool address + tokens, current tick + sqrtPrice, position tick range with liquidity, pendingRewards, underlying asset metadata, and the resolved sickleAddress. Use this instead of vfat_get_wallet_lp_positions when you want vfat's enriched view (rewards, APR-relevant data) or when the position is staked in a gauge and therefore invisible to direct ownerOf() lookups.",
     inputSchema: {
       type: "object",
       properties: {
@@ -255,10 +255,15 @@ const tools: Tool[] = [
           description:
             "Client-side filter on the `type` field (e.g. 'AERO_SLIPSTREAM_GAUGE', 'UNISWAP_V3', 'AERODROME_V2').",
         },
+        includeUnmanaged: {
+          type: "boolean",
+          description:
+            "Also return raw NFTs (no Sickle) that vfat detected on the wallet. Default false — only Sickle-managed positions.",
+        },
         stripPriceHistory: {
           type: "boolean",
           description:
-            "Drop nested underlying[].priceHistory24h / percentChange24h arrays to keep the response small. Default true.",
+            "Drop nested priceHistory24h / percentChange24h arrays to keep the response small. Default true.",
         },
       },
       required: ["address"],
@@ -493,6 +498,13 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const raw = (await res.json()) as { count?: number; data?: Array<Record<string, unknown>> }
         const totalCount = typeof raw.count === "number" ? raw.count : Array.isArray(raw.data) ? raw.data.length : 0
         let entries = Array.isArray(raw.data) ? raw.data : []
+        const includeUnmanaged = a.includeUnmanaged === true
+        if (!includeUnmanaged) {
+          entries = entries.filter((p) => {
+            const s = p.sickleAddress
+            return typeof s === "string" && s.length > 0 && s !== "0x0000000000000000000000000000000000000000"
+          })
+        }
         if (typeof a.chainId === "number") entries = entries.filter((p) => p.chainId === a.chainId)
         if (typeof a.type === "string") entries = entries.filter((p) => p.type === a.type)
         if (a.stripPriceHistory !== false) {
@@ -503,30 +515,41 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             }
             return rest
           }
-          entries = entries.map((p) => {
-            const out: Record<string, unknown> = { ...p }
-            const u = p.underlying as Array<Record<string, unknown>> | undefined
-            if (Array.isArray(u)) out.underlying = u.map(stripToken)
-            const farm = p.farm as Record<string, unknown> | undefined
-            if (farm && typeof farm === "object") {
-              const farmOut: Record<string, unknown> = { ...farm }
-              const pool = farm.pool as Record<string, unknown> | undefined
-              if (pool && typeof pool === "object") {
-                const poolOut: Record<string, unknown> = { ...pool }
-                const pu = pool.underlying as Array<Record<string, unknown>> | undefined
-                if (Array.isArray(pu)) poolOut.underlying = pu.map(stripToken)
-                farmOut.pool = poolOut
-              }
-              out.farm = farmOut
+          const stripTokenOrSelf = (val: unknown): unknown => {
+            if (val && typeof val === "object" && !Array.isArray(val)) {
+              return stripToken(val as Record<string, unknown>)
+            }
+            return val
+          }
+          const walk = (val: unknown): unknown => {
+            if (Array.isArray(val)) return val.map(walk)
+            if (!val || typeof val !== "object") return val
+            const obj = val as Record<string, unknown>
+            // If this looks like a token object with priceHistory24h, strip it.
+            const out: Record<string, unknown> = {}
+            for (const [k, v] of Object.entries(obj)) {
+              if (k === "priceHistory24h" || k === "percentChange24h") continue
+              out[k] = walk(v)
             }
             return out
-          })
+          }
+          entries = entries.map((p) => walk(p) as Record<string, unknown>)
+          void stripTokenOrSelf // keep eslint happy if unused later
         }
         return {
           content: [
             {
               type: "text",
-              text: JSON.stringify({ count: entries.length, total_for_address: totalCount, deposits: entries }, null, 2),
+              text: JSON.stringify(
+                {
+                  count: entries.length,
+                  total_for_address: totalCount,
+                  includeUnmanaged,
+                  deposits: entries,
+                },
+                null,
+                2,
+              ),
             },
           ],
         }
