@@ -39,6 +39,13 @@ No auth is required — the endpoints are unauthenticated CORS GETs.
   inflow/outflow USD.
 - `vfat_get_positions_summary({ chainId?, ownerAddress?, protocolId?, limit? })` —
   per-position summary (~1.4 MB raw, always filtered client-side).
+- `vfat_get_user_deposits({ address, chainId?, type?, stripPriceHistory? })` —
+  every live LP / farm / gauge deposit visible to vfat for `address`, across
+  all chains. The API auto-resolves the user's Sickle and merges
+  Sickle-managed gauge positions with directly-held NFT positions in one
+  call. Each entry includes pool, current tick + sqrtPrice, position tick
+  range with liquidity, pending rewards, underlying token metadata, and the
+  Sickle address when applicable.
 
 **Tokens**
 - `vfat_get_recent_token_prices({ symbol?, address?, chainId?, limit? })` —
@@ -150,6 +157,7 @@ bodies; this server decodes transparently.
 | `GET /get-recent-actions` | `vfat_get_recent_actions` |
 | `GET /action-volumes` | `vfat_get_action_volumes` |
 | `GET /positions-summary` | `vfat_get_positions_summary` |
+| `GET /farm-balances?admin_address=` | `vfat_get_user_deposits` |
 | `GET /get-most-recent-token-prices` (base64) | `vfat_get_recent_token_prices` |
 
 **On-chain (EVM RPC)** — uses [viem](https://viem.sh) against public RPCs

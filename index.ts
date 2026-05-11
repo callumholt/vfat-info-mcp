@@ -242,6 +242,29 @@ const tools: Tool[] = [
     },
   },
   {
+    name: "vfat_get_user_deposits",
+    description:
+      "Return all live LP / farm / gauge deposits visible to vfat for a wallet across every chain. Wraps GET https://info-api.vf.at/farm-balances (unauthenticated). The API automatically resolves the user's Sickle smart-wallet on each chain and merges Sickle-managed gauge positions with directly-held NFT positions in one response. Each entry includes pool address + tokens, current tick + sqrtPrice, position tick range (for NFT positions) with liquidity, pendingRewards, underlying asset metadata, and the sickleAddress when the position is Sickle-managed. Use this instead of vfat_get_wallet_lp_positions when you want vfat's enriched view (rewards, APR-relevant data) or when the position is staked in a gauge and therefore invisible to direct ownerOf() lookups.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        address: { type: "string", description: "EOA address (0x...)." },
+        chainId: { type: "number", description: "Client-side filter: keep only positions on this chain id." },
+        type: {
+          type: "string",
+          description:
+            "Client-side filter on the `type` field (e.g. 'AERO_SLIPSTREAM_GAUGE', 'UNISWAP_V3', 'AERODROME_V2').",
+        },
+        stripPriceHistory: {
+          type: "boolean",
+          description:
+            "Drop nested underlying[].priceHistory24h / percentChange24h arrays to keep the response small. Default true.",
+        },
+      },
+      required: ["address"],
+    },
+  },
+  {
     name: "vfat_get_wallet_lp_positions",
     description:
       "List concentrated-liquidity (Uniswap V3 / Aerodrome Slipstream) LP positions held by a wallet on a given chain. Iterates the known NonfungiblePositionManager contracts and decodes positions() for each tokenId owned. Returns tick range, tick range as human prices (both directions), liquidity, uncollected fees, and pool tokens with symbol/decimals. Inactive positions (liquidity=0) are included unless includeInactive=false.",
@@ -458,6 +481,52 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
             {
               type: "text",
               text: JSON.stringify({ count: out.length, total_in_catalogue: totalCount, owners: out }, null, 2),
+            },
+          ],
+        }
+      }
+
+      case "vfat_get_user_deposits": {
+        const a = (args ?? {}) as Record<string, unknown>
+        if (typeof a.address !== "string") throw new Error("address required")
+        const res = await apiGet("/farm-balances", { admin_address: a.address })
+        const raw = (await res.json()) as { count?: number; data?: Array<Record<string, unknown>> }
+        const totalCount = typeof raw.count === "number" ? raw.count : Array.isArray(raw.data) ? raw.data.length : 0
+        let entries = Array.isArray(raw.data) ? raw.data : []
+        if (typeof a.chainId === "number") entries = entries.filter((p) => p.chainId === a.chainId)
+        if (typeof a.type === "string") entries = entries.filter((p) => p.type === a.type)
+        if (a.stripPriceHistory !== false) {
+          const stripToken = (token: Record<string, unknown>) => {
+            const { priceHistory24h, percentChange24h, ...rest } = token as Record<string, unknown> & {
+              priceHistory24h?: unknown
+              percentChange24h?: unknown
+            }
+            return rest
+          }
+          entries = entries.map((p) => {
+            const out: Record<string, unknown> = { ...p }
+            const u = p.underlying as Array<Record<string, unknown>> | undefined
+            if (Array.isArray(u)) out.underlying = u.map(stripToken)
+            const farm = p.farm as Record<string, unknown> | undefined
+            if (farm && typeof farm === "object") {
+              const farmOut: Record<string, unknown> = { ...farm }
+              const pool = farm.pool as Record<string, unknown> | undefined
+              if (pool && typeof pool === "object") {
+                const poolOut: Record<string, unknown> = { ...pool }
+                const pu = pool.underlying as Array<Record<string, unknown>> | undefined
+                if (Array.isArray(pu)) poolOut.underlying = pu.map(stripToken)
+                farmOut.pool = poolOut
+              }
+              out.farm = farmOut
+            }
+            return out
+          })
+        }
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify({ count: entries.length, total_for_address: totalCount, deposits: entries }, null, 2),
             },
           ],
         }
