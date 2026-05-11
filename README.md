@@ -45,6 +45,21 @@ No auth is required — the endpoints are unauthenticated CORS GETs.
   bulk price feed across every supported chain. Decodes vfat's base64-wrapped
   response and filters client-side.
 
+**On-chain LP positions** (RPC-based, no vfat API)
+- `vfat_get_wallet_lp_positions({ chainId, ownerAddress, nftManagerAddress?, nftManagerAbi?, rpcUrl?, includeInactive? })` —
+  list every Uniswap V3 / Aerodrome Slipstream LP NFT held by `ownerAddress`
+  on `chainId`. Iterates the known NonfungiblePositionManager contracts
+  (extend `KNOWN_NFT_MANAGERS` in `lib/onchain.ts` to add more), reads
+  `positions(tokenId)`, resolves token0/token1 metadata, and returns tick
+  range as human prices in both directions. Pass a custom `nftManagerAddress`
+  with `nftManagerAbi` to query an NPM that isn't in the curated list.
+- `vfat_decode_lp_tx({ chainId, txHash, rpcUrl? })` — fetch a transaction
+  receipt and decode every Uniswap V3 / Slipstream LP event:
+  pool `Mint`/`Burn`/`Collect` and NPM `IncreaseLiquidity`/
+  `DecreaseLiquidity`/`Collect`. Handles indexed `int24` sign-extension and
+  enriches with token0/token1 metadata so raw amounts can be scaled to human
+  units.
+
 ## Setup
 
 ```bash

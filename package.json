@@ -1,6 +1,6 @@
 {
   "name": "vfat-info-mcp",
-  "version": "0.1.0",
+  "version": "0.2.0",
   "description": "MCP server exposing vfat.io farm, TVL, and price data via the public info-api.vf.at endpoints",
   "license": "MIT",
   "author": "Callum Holt",
@@ -12,12 +12,24 @@
   "bugs": {
     "url": "https://github.com/callumholt/vfat-info-mcp/issues"
   },
-  "keywords": ["mcp", "model-context-protocol", "vfat", "defi", "aerodrome", "uniswap", "base"],
+  "keywords": [
+    "mcp",
+    "model-context-protocol",
+    "vfat",
+    "defi",
+    "aerodrome",
+    "uniswap",
+    "base"
+  ],
   "type": "module",
   "bin": {
     "vfat-mcp": "./build/index.js"
   },
-  "files": ["build", "README.md", "LICENSE"],
+  "files": [
+    "build",
+    "README.md",
+    "LICENSE"
+  ],
   "scripts": {
     "build": "tsc",
     "start": "node build/index.js",
@@ -25,7 +37,8 @@
     "prepare": "npm run build"
   },
   "dependencies": {
-    "@modelcontextprotocol/sdk": "^1.0.4"
+    "@modelcontextprotocol/sdk": "^1.0.4",
+    "viem": "^2.48.11"
   },
   "devDependencies": {
     "@types/node": "^22.0.0",

@@ -15,6 +15,17 @@
 import { Server } from "@modelcontextprotocol/sdk/server/index.js"
 import { StdioServerTransport } from "@modelcontextprotocol/sdk/server/stdio.js"
 import { CallToolRequestSchema, ListToolsRequestSchema, type Tool } from "@modelcontextprotocol/sdk/types.js"
+import type { Address, Hex } from "viem"
+import { getAddress } from "viem"
+import {
+  DEFAULT_RPC_URLS,
+  KNOWN_NFT_MANAGERS,
+  type DecodedPosition,
+  decodeLpLogs,
+  enrichLpEvents,
+  listPositionsForManager,
+  makeClient,
+} from "./lib/onchain.js"
 
 const API_BASE = process.env.VFAT_API_BASE || "https://info-api.vf.at"
 
@@ -230,6 +241,48 @@ const tools: Tool[] = [
       },
     },
   },
+  {
+    name: "vfat_get_wallet_lp_positions",
+    description:
+      "List concentrated-liquidity (Uniswap V3 / Aerodrome Slipstream) LP positions held by a wallet on a given chain. Iterates the known NonfungiblePositionManager contracts and decodes positions() for each tokenId owned. Returns tick range, tick range as human prices (both directions), liquidity, uncollected fees, and pool tokens with symbol/decimals. Inactive positions (liquidity=0) are included unless includeInactive=false.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        chainId: { type: "number", description: "EVM chain id (e.g. 8453 for Base)." },
+        ownerAddress: { type: "string", description: "Wallet address that owns the position NFTs." },
+        nftManagerAddress: {
+          type: "string",
+          description:
+            "Optional: restrict to a specific NPM. If omitted, every NPM known for the chain is queried (Aerodrome Slipstream + Uniswap V3 on Base, Uniswap V3 elsewhere).",
+        },
+        nftManagerAbi: {
+          type: "string",
+          enum: ["uniswap-v3", "aerodrome-slipstream"],
+          description: "Required when nftManagerAddress is provided and not in the known list.",
+        },
+        rpcUrl: { type: "string", description: "Override the default public RPC for the chain." },
+        includeInactive: {
+          type: "boolean",
+          description: "Include positions with liquidity=0. Default true.",
+        },
+      },
+      required: ["chainId", "ownerAddress"],
+    },
+  },
+  {
+    name: "vfat_decode_lp_tx",
+    description:
+      "Decode the LP-related events in a transaction receipt: Uniswap V3 / Slipstream pool Mint/Burn/Collect and NFT-manager IncreaseLiquidity/DecreaseLiquidity/Collect. Returns each decoded event with tick range, raw amounts, tokenId, and (where the pool is recognisable) token0/token1 metadata so raw amounts can be scaled. Mirrors the manual eth_getTransactionReceipt + topic decode flow but handles indexed int24 sign-extension correctly.",
+    inputSchema: {
+      type: "object",
+      properties: {
+        chainId: { type: "number", description: "EVM chain id (e.g. 8453 for Base)." },
+        txHash: { type: "string", description: "Transaction hash (0x...)." },
+        rpcUrl: { type: "string", description: "Override the default public RPC for the chain." },
+      },
+      required: ["chainId", "txHash"],
+    },
+  },
 ]
 
 const server = new Server({ name: "vfat", version: "0.1.0" }, { capabilities: { tools: {} } })
@@ -423,6 +476,109 @@ server.setRequestHandler(CallToolRequestSchema, async (req) => {
         const limit = typeof a.limit === "number" ? a.limit : 200
         out = out.slice(0, limit)
         return { content: [{ type: "text", text: JSON.stringify(out, null, 2) }] }
+      }
+
+      case "vfat_get_wallet_lp_positions": {
+        const a = (args ?? {}) as Record<string, unknown>
+        if (typeof a.chainId !== "number") throw new Error("chainId required")
+        if (typeof a.ownerAddress !== "string") throw new Error("ownerAddress required")
+        const chainId = a.chainId
+        const owner = getAddress(a.ownerAddress as Address)
+        const rpcUrl = typeof a.rpcUrl === "string" ? a.rpcUrl : undefined
+        const client = makeClient(chainId, rpcUrl)
+        const includeInactive = a.includeInactive !== false
+
+        const known = KNOWN_NFT_MANAGERS[chainId] ?? []
+        let managers = known
+        if (typeof a.nftManagerAddress === "string") {
+          const addr = getAddress(a.nftManagerAddress as Address)
+          const match = known.find((m) => m.address.toLowerCase() === addr.toLowerCase())
+          if (match) {
+            managers = [match]
+          } else {
+            if (a.nftManagerAbi !== "uniswap-v3" && a.nftManagerAbi !== "aerodrome-slipstream") {
+              throw new Error(
+                `nftManagerAddress ${addr} is not in the known list; please also pass nftManagerAbi (\"uniswap-v3\" or \"aerodrome-slipstream\").`,
+              )
+            }
+            managers = [{ address: addr, protocol: "custom", abi: a.nftManagerAbi }]
+          }
+        }
+        if (managers.length === 0) {
+          throw new Error(
+            `No known NPMs for chainId ${chainId}; pass nftManagerAddress + nftManagerAbi explicitly.`,
+          )
+        }
+
+        const results: DecodedPosition[] = []
+        const errors: Array<{ manager: Address; protocol: string; error: string }> = []
+        for (const manager of managers) {
+          try {
+            const positions = await listPositionsForManager(client, manager, owner, chainId)
+            results.push(...positions)
+          } catch (err) {
+            errors.push({
+              manager: manager.address,
+              protocol: manager.protocol,
+              error: err instanceof Error ? err.message : String(err),
+            })
+          }
+        }
+        const filtered = includeInactive ? results : results.filter((p) => p.active)
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  chainId,
+                  owner,
+                  rpc: rpcUrl ?? DEFAULT_RPC_URLS[chainId],
+                  managers_queried: managers.map((m) => ({ address: m.address, protocol: m.protocol })),
+                  count: filtered.length,
+                  positions: filtered,
+                  errors,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        }
+      }
+
+      case "vfat_decode_lp_tx": {
+        const a = (args ?? {}) as Record<string, unknown>
+        if (typeof a.chainId !== "number") throw new Error("chainId required")
+        if (typeof a.txHash !== "string") throw new Error("txHash required")
+        const chainId = a.chainId
+        const rpcUrl = typeof a.rpcUrl === "string" ? a.rpcUrl : undefined
+        const client = makeClient(chainId, rpcUrl)
+        const receipt = await client.getTransactionReceipt({ hash: a.txHash as Hex })
+        const events = decodeLpLogs(receipt.logs)
+        const poolMeta = await enrichLpEvents(client, events, chainId)
+        return {
+          content: [
+            {
+              type: "text",
+              text: JSON.stringify(
+                {
+                  chainId,
+                  txHash: a.txHash,
+                  blockNumber: receipt.blockNumber?.toString(),
+                  status: receipt.status,
+                  from: receipt.from,
+                  to: receipt.to,
+                  count: events.length,
+                  events,
+                  pools: poolMeta,
+                },
+                null,
+                2,
+              ),
+            },
+          ],
+        }
       }
 
       default:
